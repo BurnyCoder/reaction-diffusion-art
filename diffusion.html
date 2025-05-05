@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Reaction-Diffusion Art</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Basic styling for body, canvas, and controls */
+        body {
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars */
+            background-color: #111827; /* Dark background */
+            display: flex;
+            flex-direction: column; /* Stack canvas and controls vertically */
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Inter', sans-serif; /* Consistent font */
+            color: #e5e7eb; /* Light text color */
+        }
+        #canvas-container {
+            position: relative; /* For positioning info text */
+            display: flex; /* Use flex to center canvas if needed */
+            justify-content: center;
+            align-items: center;
+            width: 95vw; /* Limit container width */
+            height: 80vh; /* Limit container height */
+            margin-bottom: 1rem; /* Space between canvas and controls */
+        }
+        canvas {
+            display: block;
+            /* Canvas will be sized by JS, but set max */
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 0.5rem; /* Rounded corners */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5); /* Subtle shadow */
+            background-color: #000; /* Black background for the canvas itself */
+        }
+        /* Style for the info text */
+        #info {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            color: rgba(255, 255, 255, 0.8);
+            background-color: rgba(0, 0, 0, 0.6);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            z-index: 10; /* Ensure it's above the canvas */
+        }
+        /* Styling for controls */
+        #controls {
+            display: flex;
+            flex-direction: column; /* Stack sliders */
+            align-items: center;
+            padding: 0.5rem;
+            background-color: rgba(31, 41, 55, 0.8); /* Semi-transparent dark gray */
+            border-radius: 0.5rem;
+            width: clamp(250px, 80vw, 500px); /* Responsive width */
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            width: 100%;
+            justify-content: space-between;
+        }
+        .control-group label {
+            margin-right: 0.5rem;
+            font-size: 0.875rem;
+            min-width: 100px; /* Align sliders */
+            text-align: right;
+        }
+        .control-group input[type="range"] {
+            flex-grow: 1; /* Take remaining space */
+            cursor: pointer;
+             accent-color: #3b82f6; /* Blue accent for slider */
+        }
+        .control-group span {
+            margin-left: 0.5rem;
+            font-size: 0.875rem;
+            min-width: 50px; /* Space for value */
+            text-align: left;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-900">
+    <div id="canvas-container">
+        <canvas id="reactionDiffusionCanvas"></canvas>
+        <div id="info">Initializing...</div>
+    </div>
+
+    <div id="controls">
+        <div class="control-group">
+            <label for="fSlider">Feed (f):</label>
+            <input type="range" id="fSlider" min="0.01" max="0.1" step="0.0001" value="0.0545">
+            <span id="fValue">0.0545</span>
+        </div>
+        <div class="control-group">
+            <label for="kSlider">Kill (k):</label>
+            <input type="range" id="kSlider" min="0.04" max="0.07" step="0.0001" value="0.062">
+            <span id="kValue">0.0620</span>
+        </div>
+         <div class="control-group">
+            <label for="noiseSlider">Noise:</label>
+            <input type="range" id="noiseSlider" min="0" max="0.01" step="0.0001" value="0.0005">
+            <span id="noiseValue">0.0005</span>
+        </div>
+         <div class="control-group">
+            <label for="oscillationSlider">Oscillation:</label>
+            <input type="range" id="oscillationSlider" min="0" max="0.01" step="0.0001" value="0.001">
+            <span id="oscillationValue">0.0010</span>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const canvas = document.getElementById('reactionDiffusionCanvas');
+        const ctx = canvas.getContext('2d');
+        const infoDiv = document.getElementById('info');
+        const canvasContainer = document.getElementById('canvas-container');
+
+        // Parameter Sliders
+        const fSlider = document.getElementById('fSlider');
+        const kSlider = document.getElementById('kSlider');
+        const noiseSlider = document.getElementById('noiseSlider');
+        const oscillationSlider = document.getElementById('oscillationSlider');
+        const fValueSpan = document.getElementById('fValue');
+        const kValueSpan = document.getElementById('kValue');
+        const noiseValueSpan = document.getElementById('noiseValue');
+        const oscillationValueSpan = document.getElementById('oscillationValue');
+
+        // Base simulation parameters (controlled by sliders)
+        let base_f = parseFloat(fSlider.value);
+        let base_k = parseFloat(kSlider.value);
+
+        // Dynamic parameters (will vary around base values)
+        let current_f = base_f;
+        let current_k = base_k;
+
+        // Other parameters
+        let Du = 0.16;  // Diffusion rate for U
+        let Dv = 0.08;  // Diffusion rate for V
+        let dt = 1.0;   // Time step
+
+        // Dynamic behavior parameters
+        let noiseLevel = parseFloat(noiseSlider.value); // Max noise added per step
+        let oscillationAmplitude = parseFloat(oscillationSlider.value); // Max deviation for f/k oscillation
+        const oscillationFrequency = 0.00005; // How fast f/k oscillate
+
+        // Simulation grid dimensions
+        let gridWidth = 256;
+        let gridHeight = 256;
+
+        // Simulation steps per animation frame
+        const stepsPerFrame = 10;
+
+        // --- Simulation State ---
+        let u, v, nextU, nextV;
+
+        // --- Initialization ---
+        function initSimulation() {
+            canvas.width = gridWidth;
+            canvas.height = gridHeight;
+            resizeCanvas(); // Adjust display size
+
+            u = new Float32Array(gridWidth * gridHeight);
+            v = new Float32Array(gridWidth * gridHeight);
+            nextU = new Float32Array(gridWidth * gridHeight);
+            nextV = new Float32Array(gridWidth * gridHeight);
+
+            u.fill(1.0);
+            v.fill(0.0);
+
+            // Initial seed
+            seedArea(Math.floor(gridWidth / 2), Math.floor(gridHeight / 2), 10);
+
+            updateInfo(); // Initial info text
+        }
+
+        // --- Seeding ---
+        function seedArea(centerX, centerY, radius) {
+             for (let y = centerY - radius; y < centerY + radius; y++) {
+                for (let x = centerX - radius; x < centerX + radius; x++) {
+                    // Ensure coordinates are within bounds
+                    const wrappedY = (y + gridHeight) % gridHeight;
+                    const wrappedX = (x + gridWidth) % gridWidth;
+
+                    const dx = x - centerX; // Use original coords for distance calc
+                    const dy = y - centerY;
+                    if (dx * dx + dy * dy < radius * radius) {
+                        const index = wrappedY * gridWidth + wrappedX;
+                        if (index >= 0 && index < u.length) {
+                             // Perturb slightly differently than initial seed for variety
+                            u[index] = 0.4 + Math.random() * 0.2;
+                            v[index] = 0.2 + Math.random() * 0.2;
+                        }
+                    }
+                }
+            }
+        }
+
+
+        // --- Simulation Step ---
+        function simulateStep() {
+            // --- Parameter Oscillation ---
+            const time = Date.now();
+            const oscillation_f = Math.sin(time * oscillationFrequency) * oscillationAmplitude;
+            const oscillation_k = Math.cos(time * oscillationFrequency * 0.7) * oscillationAmplitude; // Slightly different freq for k
+            current_f = base_f + oscillation_f;
+            current_k = base_k + oscillation_k;
+
+            // Clamp oscillating values to reasonable bounds to prevent instability
+            current_f = Math.max(0.01, Math.min(0.1, current_f));
+            current_k = Math.max(0.04, Math.min(0.07, current_k));
+
+            // --- Main Simulation Loop ---
+            for (let y = 0; y < gridHeight; y++) {
+                for (let x = 0; x < gridWidth; x++) {
+                    const i = y * gridWidth + x;
+                    const u_c = u[i];
+                    const v_c = v[i];
+
+                    // Neighbor indices (wrapping)
+                    const x_prev = (x === 0) ? gridWidth - 1 : x - 1;
+                    const x_next = (x === gridWidth - 1) ? 0 : x + 1;
+                    const y_prev = (y === 0) ? gridHeight - 1 : y - 1;
+                    const y_next = (y === gridHeight - 1) ? 0 : y + 1;
+
+                    // Get neighbor values (efficiently accessing the flat array)
+                    const u_n = u[y_prev * gridWidth + x];
+                    const u_s = u[y_next * gridWidth + x];
+                    const u_e = u[y * gridWidth + x_next];
+                    const u_w = u[y * gridWidth + x_prev];
+                    const u_ne = u[y_prev * gridWidth + x_next];
+                    const u_nw = u[y_prev * gridWidth + x_prev];
+                    const u_se = u[y_next * gridWidth + x_next];
+                    const u_sw = u[y_next * gridWidth + x_prev];
+
+                    const v_n = v[y_prev * gridWidth + x];
+                    const v_s = v[y_next * gridWidth + x];
+                    const v_e = v[y * gridWidth + x_next];
+                    const v_w = v[y * gridWidth + x_prev];
+                    const v_ne = v[y_prev * gridWidth + x_next];
+                    const v_nw = v[y_prev * gridWidth + x_prev];
+                    const v_se = v[y_next * gridWidth + x_next];
+                    const v_sw = v[y_next * gridWidth + x_prev];
+
+                    // Laplacian calculation
+                    const laplaceU = (u_n + u_s + u_e + u_w) * 0.2 + (u_ne + u_nw + u_se + u_sw) * 0.05 - u_c;
+                    const laplaceV = (v_n + v_s + v_e + v_w) * 0.2 + (v_ne + v_nw + v_se + v_sw) * 0.05 - v_c;
+
+                    // Reaction term
+                    const reaction = u_c * v_c * v_c;
+
+                    // --- Noise Injection ---
+                    // Add small random noise before calculating the next step's value
+                    const noise_u = (Math.random() - 0.5) * 2 * noiseLevel; // Noise range [-noiseLevel, +noiseLevel]
+                    const noise_v = (Math.random() - 0.5) * 2 * noiseLevel;
+
+                    // Gray-Scott equations with noise
+                    nextU[i] = u_c + (Du * laplaceU - reaction + current_f * (1.0 - u_c)) * dt + noise_u;
+                    nextV[i] = v_c + (Dv * laplaceV + reaction - (current_f + current_k) * v_c) * dt + noise_v;
+
+                    // Clamp values
+                    nextU[i] = Math.max(0, Math.min(1, nextU[i]));
+                    nextV[i] = Math.max(0, Math.min(1, nextV[i]));
+                }
+            }
+
+            // Swap buffers
+            [u, nextU] = [nextU, u];
+            [v, nextV] = [nextV, v];
+        }
+
+        // --- Rendering ---
+        function render() {
+            const imageData = ctx.getImageData(0, 0, gridWidth, gridHeight);
+            const data = imageData.data;
+
+            for (let i = 0; i < gridWidth * gridHeight; i++) {
+                const v_val = v[i]; // Color based on V concentration
+
+                // Blue -> Cyan -> Green -> Yellow -> Red gradient based on V
+                let r, g, b;
+                const v_norm = Math.min(1, Math.max(0, v_val / 0.6)); // Normalize V (adjust divisor for range)
+
+                if (v_norm < 0.25) { // Blue -> Cyan
+                    const t = v_norm * 4;
+                    r = 0;
+                    g = Math.floor(255 * t);
+                    b = 255;
+                } else if (v_norm < 0.5) { // Cyan -> Green
+                    const t = (v_norm - 0.25) * 4;
+                    r = 0;
+                    g = 255;
+                    b = Math.floor(255 * (1 - t));
+                } else if (v_norm < 0.75) { // Green -> Yellow
+                    const t = (v_norm - 0.5) * 4;
+                    r = Math.floor(255 * t);
+                    g = 255;
+                    b = 0;
+                } else { // Yellow -> Red
+                    const t = (v_norm - 0.75) * 4;
+                    r = 255;
+                    g = Math.floor(255 * (1 - t));
+                    b = 0;
+                }
+
+                const dataIndex = i * 4;
+                data[dataIndex] = r;
+                data[dataIndex + 1] = g;
+                data[dataIndex + 2] = b;
+                data[dataIndex + 3] = 255; // Alpha
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+         // --- Update Info Display ---
+        function updateInfo() {
+            // Display the *current* oscillating f and k values
+            infoDiv.textContent = `f: ${current_f.toFixed(4)}, k: ${current_k.toFixed(4)}`;
+        }
+
+
+        // --- Animation Loop ---
+        let frameCount = 0;
+        function animate() {
+            for (let i = 0; i < stepsPerFrame; i++) {
+                simulateStep();
+            }
+            render();
+
+            // Update info text less frequently to avoid flickering
+            if (frameCount % 10 === 0) {
+                 updateInfo();
+            }
+            frameCount++;
+
+
+            requestAnimationFrame(animate);
+        }
+
+        // --- Canvas Resizing ---
+        function resizeCanvas() {
+            // Get container dimensions
+            const containerWidth = canvasContainer.clientWidth;
+            const containerHeight = canvasContainer.clientHeight;
+
+            // Calculate aspect ratios
+            const canvasAspect = gridWidth / gridHeight;
+            const containerAspect = containerWidth / containerHeight;
+
+            let displayWidth, displayHeight;
+
+            // Determine scaling based on limiting dimension within the container
+            if (containerAspect > canvasAspect) {
+                displayHeight = containerHeight;
+                displayWidth = displayHeight * canvasAspect;
+            } else {
+                displayWidth = containerWidth;
+                displayHeight = displayWidth / canvasAspect;
+            }
+
+            // Set the canvas display size (CSS pixels)
+            canvas.style.width = `${Math.round(displayWidth)}px`;
+            canvas.style.height = `${Math.round(displayHeight)}px`;
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('resize', resizeCanvas);
+
+        // Slider Listeners
+        fSlider.addEventListener('input', (e) => {
+            base_f = parseFloat(e.target.value);
+            fValueSpan.textContent = base_f.toFixed(4);
+            // No need to call updateInfo here, it updates in animation loop
+        });
+        kSlider.addEventListener('input', (e) => {
+            base_k = parseFloat(e.target.value);
+            kValueSpan.textContent = base_k.toFixed(4);
+        });
+         noiseSlider.addEventListener('input', (e) => {
+            noiseLevel = parseFloat(e.target.value);
+            noiseValueSpan.textContent = noiseLevel.toFixed(4);
+        });
+        oscillationSlider.addEventListener('input', (e) => {
+            oscillationAmplitude = parseFloat(e.target.value);
+            oscillationValueSpan.textContent = oscillationAmplitude.toFixed(4);
+        });
+
+
+        // Click to seed listener
+        canvas.addEventListener('click', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const canvasX = (event.clientX - rect.left) * scaleX;
+            const canvasY = (event.clientY - rect.top) * scaleY;
+            const gridX = Math.floor(canvasX);
+            const gridY = Math.floor(canvasY);
+
+            seedArea(gridX, gridY, 15); // Use the seeding function
+            console.log(`Seeded at grid coordinates: (${gridX}, ${gridY})`);
+        });
+
+        // --- Start ---
+        document.addEventListener('DOMContentLoaded', () => {
+            try {
+                initSimulation();
+                animate();
+            } catch (error) {
+                console.error("Initialization failed:", error);
+                infoDiv.textContent = "Error initializing. Check console.";
+                infoDiv.style.color = 'red';
+            }
+        });
+
+    </script>
+</body>
+</html>
